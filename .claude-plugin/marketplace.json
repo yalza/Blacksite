@@ -1,0 +1,5 @@
+{
+  "name": "blacksite",
+  "owner": { "name": "yalza" },
+  "plugins": [{ "name": "blacksite", "source": "./" }]
+}
