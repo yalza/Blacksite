@@ -1,6 +1,6 @@
 {
   "name": "blacksite",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Giao diện Hắc kim: bảng điều khiển, dải nhiệm vụ, lá chắn chặn lệnh nguy hiểm",
   "types": "./types/index.d.ts"
 }

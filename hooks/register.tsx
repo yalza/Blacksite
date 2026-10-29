@@ -80,14 +80,39 @@ const WHEN_ARMED: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bgit\b.*\bclean\b.*\s-[a-zA-Z]*f/, 'git clean -f'],
 ]
 
-/** Why the shield refuses this Bash command, or undefined to let it run. */
+// PowerShell and cmd on Windows: case-insensitive, flags may be shortened (-r, -fo)
+const WINDOWS_DELETE = /(^|[\s;(])(remove-item|ri|rm|del|erase|rd|rmdir)(?![\w-])/i
+const PS_RECURSE = /\s-r(e(c(u(r(s(e)?)?)?)?)?)?(?![\w-])/i
+const PS_FORCE = /\s-fo(r(c(e)?)?)?(?![\w-])/i
+const WINDOWS_ALWAYS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\b(rd|rmdir|del|erase)\b.*\/s\b.*\/q\b|\b(rd|rmdir|del|erase)\b.*\/q\b.*\/s\b/i, 'xóa thư mục không hỏi (/s /q)'],
+  [/\b(format-volume|clear-disk|initialize-disk)\b/i, 'định dạng ổ đĩa'],
+  [/\bformat(\.com)?\s+[a-z]:/i, 'định dạng ổ đĩa (format)'],
+]
+
+function isForcedRecursiveRemoveItem(segment: string): boolean {
+  return WINDOWS_DELETE.test(segment) && PS_RECURSE.test(segment) && PS_FORCE.test(segment)
+}
+
+/** Why the shield refuses this Bash or PowerShell command, or undefined to let it run. */
 function judge(command: string, isArmed: boolean): string | undefined {
   for (const segment of command.split(SEGMENT)) {
     if (isForcedRecursiveRm(segment)) return 'rm -rf'
-    for (const [pattern, reason] of ALWAYS) if (pattern.test(segment)) return reason
-    if (isArmed) for (const [pattern, reason] of WHEN_ARMED) if (pattern.test(segment)) return reason
+    if (isForcedRecursiveRemoveItem(segment)) return 'Remove-Item -Recurse -Force'
+    for (const [pattern, reason] of [...ALWAYS, ...WINDOWS_ALWAYS]) if (pattern.test(segment)) return reason
+    if (!isArmed) continue
+    for (const [pattern, reason] of WHEN_ARMED) if (pattern.test(segment)) return reason
+    if (WINDOWS_DELETE.test(segment)) return 'xóa file khi đang báo động'
   }
   return undefined
+}
+
+const SHELLS = new Set(['Bash', 'PowerShell'])
+
+/** The command a shell tool is about to run, or '' for any other tool. */
+function shellCommand(tool: string, input: Record<string, unknown>): string {
+  const command = input.command
+  return SHELLS.has(tool) && typeof command === 'string' ? command : ''
 }
 
 const denial = (reason: string) =>
@@ -127,8 +152,20 @@ function meter(percent: number | undefined, width: number): string {
   return '▰'.repeat(full) + '▱'.repeat(width - full)
 }
 
+const isWindows = ($: EngineInterface) => /^[A-Za-z]:[\\/]/.test($.plugin.root)
+
+// $.audio.play has no player on Windows, so the clip goes through PowerShell's SoundPlayer there
 function chime($: EngineInterface, clip: 'alarm' | 'done') {
-  $.audio.play({ asset: `sounds/${clip}.wav` }).catch(() => undefined)
+  if (!isWindows($)) {
+    $.audio.play({ asset: `sounds/${clip}.wav` }).catch(() => undefined)
+    return
+  }
+  const file = `${$.plugin.root}/sounds/${clip}.wav`.replace(/\//g, '\\').replace(/'/g, "''")
+  $.process
+    .run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `(New-Object Media.SoundPlayer '${file}').PlaySync()`], {
+      timeoutMs: 10_000,
+    })
+    .catch(() => undefined)
 }
 
 async function refreshStatus($: EngineInterface) {
@@ -260,7 +297,7 @@ export const register: Register = on => {
 
     return {
       text: isArmed
-        ? 'Chế độ báo động: BẬT. Lá chắn chặn thêm mọi lệnh rm, git reset --hard và git clean -f.'
+        ? 'Chế độ báo động: BẬT. Lá chắn chặn thêm mọi lệnh xóa (rm, Remove-Item, del), git reset --hard và git clean -f.'
         : 'Chế độ báo động: TẮT.',
     }
   })
@@ -268,7 +305,7 @@ export const register: Register = on => {
   on('command.run', { command: 'nhiemvu' }, async ($, e) => ({ text: await missionCommand($, e.args) }))
 
   on('tool.call', async ($, e, next) => {
-    const command = e.tool === 'Bash' ? String(e.command) : ''
+    const command = shellCommand(e.tool, e as unknown as Record<string, unknown>)
     const reason = command ? judge(command, await read($, armed)) : undefined
     const row: ToolRow = {
       id: e.tool_use_id,
@@ -295,7 +332,8 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => {
     if (next.called) return next(e)
-    const reason = e.tool === 'Bash' ? judge(String(e.command), false) : undefined
+    const command = shellCommand(e.tool, e as unknown as Record<string, unknown>)
+    const reason = command ? judge(command, false) : undefined
 
     return reason ? { deny: denial(reason) } : next(e)
   })
@@ -432,9 +470,10 @@ export const register: Register = on => {
               LỆNH ĐÃ CHẶN
             </Text>
           </Box>
-          <Text color={C.champagne}>■ rm -rf · git push --force · mkfs · dd</Text>
+          <Text color={C.champagne}>■ rm -rf · Remove-Item -Recurse -Force · rd /s /q</Text>
+          <Text color={C.champagne}>■ git push --force · format · mkfs · dd</Text>
           <Text color={isArmed ? C.champagne : C.ash}>
-            {isArmed ? '■ Thêm: mọi lệnh rm · git reset --hard · git clean' : '□ Bật báo động để chặn thêm lệnh xóa'}
+            {isArmed ? '■ Thêm: mọi lệnh xóa · git reset --hard · git clean' : '□ Bật báo động để chặn thêm lệnh xóa'}
           </Text>
           <Box flexDirection="row">
             <Button

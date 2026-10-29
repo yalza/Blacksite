@@ -107,3 +107,28 @@ test('a blocked command shows in the pane log and the band count', async ($, on)
     await band.unmount()
   }
 })
+
+// PowerShell is a tool of the Windows build, absent from this build's tool table
+const powershell = (command: string) => ({ tool: 'PowerShell', command }) as unknown as { tool: 'Bash'; command: string }
+
+test('the shield refuses PowerShell and cmd deletes on Windows', async ($, on) => {
+  world(on)
+  on('tool.call', () => ({ result: {} }))
+
+  const refused = [
+    'Remove-Item -Recurse -Force C:\\Users\\Admin\\Projects',
+    'rm -r -fo .\\build',
+    'rd /s /q C:\\temp',
+    'Format-Volume -DriveLetter D',
+  ]
+  for (const command of refused) {
+    const ran = await $.tool.call(powershell(command))
+    expect(JSON.stringify(ran).includes('lá chắn')).toBe(true)
+  }
+
+  const allowed = ['Remove-Item .\\notes.txt', 'Get-ChildItem -Recurse -Force', 'dir /s']
+  for (const command of allowed) {
+    const ran = await $.tool.call(powershell(command))
+    expect(JSON.stringify(ran).includes('lá chắn')).toBe(false)
+  }
+})
